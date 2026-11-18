@@ -4,8 +4,10 @@
 """
 from __future__ import annotations
 
+import copy
 import time
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from app.seed import SEED_ROWS
 
@@ -18,8 +20,21 @@ class Store:
         self._versions: dict[str, int] = {name: 1 for name in self._tables}
         self._created_at: dict[str, float] = {name: time.time() for name in self._tables}
 
+    @contextmanager
+    def transaction(self) -> Iterator["Store"]:
+        """内存事务：发生异常时整表回滚，避免留档只写了一半的残留。"""
+        snapshot = copy.deepcopy(self._tables)
+        versions = dict(self._versions)
+        try:
+            yield self
+        except Exception:
+            self._tables = snapshot
+            self._versions = versions
+            raise
+
     def module_names(self) -> list[str]:
-        return sorted(self._tables)
+        """业务模块名；以下划线开头的是内部留档表，不计入概览与健康检查。"""
+        return sorted(name for name in self._tables if not name.startswith("_"))
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])

@@ -8,7 +8,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.schemas import ActionPayload, ActionResult, EntryPayload, PageResult
+from app.services import metric_ledger
 from app.services.metric_def import MetricDefService
+from app.services.metric_formula import POLICY_HISTORICAL
 
 router = APIRouter(prefix="/api/metric_def", tags=["指标定义"])
 
@@ -63,6 +65,52 @@ def export_entries(
     return StreamingResponse(
         iter([output.getvalue()]), media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="metric_def.csv"'})
+
+
+@router.get("/confirmation", response_model=dict)
+def get_confirmation(metric_code: str | None = Query(default=None)) -> dict:
+    """读取 V031 留档：列表页与口径注册消费端都从这里取核对结果。"""
+    return metric_ledger.list_checks(metric_code)
+
+
+@router.get("/confirmation/history", response_model=dict)
+def get_confirmation_history(metric_code: str | None = Query(default=None)) -> dict:
+    """回查全部留档批次，历史公式解析结果与当前结果都可追溯。"""
+    items = metric_ledger.history(metric_code)
+    return {"task": metric_ledger.TASK, "items": items, "total": len(items)}
+
+
+@router.post("/confirmation", response_model=dict)
+def confirm_versions(policy: str = Query(default=POLICY_HISTORICAL, description="历史优先、按版本时间")) -> dict:
+    """按 V031 核对全部指标定义公式版本并整批留档；失败整批回滚。"""
+    try:
+        return service.confirm_versions(policy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{entry_id}/detail", response_model=dict)
+def get_entry_detail(entry_id: int) -> dict:
+    """指标定义详情：原始字段、统一计算路径结果与 V031 留档核对。"""
+    detail = service.get_detail(entry_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"指标定义 {entry_id} 不存在或已归档")
+    return detail
+
+
+@router.get("/{entry_id}/check", response_model=dict)
+def check_entry(
+    entry_id: int,
+    policy: str = Query(default=POLICY_HISTORICAL, description="历史优先、按版本时间"),
+) -> dict:
+    """按共用公式路径复算单条指标定义，返回历史/当前口径差异。"""
+    try:
+        result = service.check_entry(entry_id, policy=policy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"指标定义 {entry_id} 不存在或已归档")
+    return result
 
 
 @router.get("/{entry_id}", response_model=dict)

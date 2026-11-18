@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from app.schemas import ActionPayload, ActionResult, EntryPayload, PageResult
 from app.services.metric_alias import MetricAliasService
+from app.services.metric_formula import POLICY_HISTORICAL
 
 router = APIRouter(prefix="/api/metric_alias", tags=["口径注册"])
 
@@ -63,6 +64,33 @@ def export_entries(
     return StreamingResponse(
         iter([output.getvalue()]), media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="metric_alias.csv"'})
+
+
+@router.get("/consumer", response_model=dict)
+def get_consumer_view() -> dict:
+    """消费端：确认 V031 后读取全量指标定义公式版本，并用同一历史样例复算。"""
+    return service.consumer_view()
+
+
+@router.get("/{entry_id}/detail", response_model=dict)
+def get_entry_detail(entry_id: int) -> dict:
+    """口径版本详情：读取 V031 留档里的公式和精度复算，并列出历史差异。"""
+    detail = service.get_detail(entry_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"口径版本 {entry_id} 不存在或已归档")
+    return detail
+
+
+@router.get("/{entry_id}/conflict", response_model=dict)
+def get_version_conflict(entry_id: int, policy: str = Query(default=POLICY_HISTORICAL)) -> dict:
+    """同一指标同时存在历史/当前公式时的版本冲突判定。"""
+    try:
+        result = service.version_conflict(entry_id, policy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"口径版本 {entry_id} 不存在或找不到对应指标定义")
+    return result
 
 
 @router.get("/{entry_id}", response_model=dict)
